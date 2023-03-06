@@ -8,3 +8,6 @@ Currently the service provides following functionality:
 * Compute centroids for term sets.
 * Compute distances between centroids. 
 
+## Usage
+
+`flask run`

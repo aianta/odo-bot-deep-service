@@ -4,9 +4,9 @@ import marshmallow as ma
 Define Schemas
 '''
 class EmbeddingSchema(ma.Schema):
-    id = ma.fields.UUID()
+    id = ma.fields.String() # We're expecting something like <timeline_uuid>#<index>
     # embedding = ma.fields.String() #TODO: figure out what type this should be.
 
 class EmbeddingRequestSchema(ma.Schema):
-    id = ma.fields.UUID() # Allow request to specify a uuid for convenience
+    id = ma.fields.UUID() # Allow request to specify a uuid for convenience, this will be used to create an embedding set
     entity = ma.fields.Dict()
