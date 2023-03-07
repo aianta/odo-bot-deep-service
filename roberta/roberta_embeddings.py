@@ -9,8 +9,7 @@ from .utils import compute_centroid
 class RoBERTa:
     model = torch.hub.load('pytorch/fairseq', 'roberta.large')
 
-    def __init__(self, app):
-        self.app = app
+    def __init__(self):
         '''
         For reproduceability. See: https://pytorch.org/docs/stable/notes/randomness.html
         '''
@@ -54,10 +53,14 @@ class RoBERTa:
     Returns:
     A 1-d embedding of the entity
     '''
-    def embed(self, terms):
+    def embed(self, terms, id):
 
         embeddings = self._compute_embeddings(terms)
         embedding = compute_centroid(embeddings)
+        
+        #save our work
+        with open('embeddings/' + id + ".npy", 'wb') as f:
+            np.save(f, embedding)
 
         return embedding
 
