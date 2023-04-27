@@ -4,8 +4,12 @@ import marshmallow as ma
 from flask_smorest import Api, Blueprint, abort
 
 from .model import Embedding, EmbeddingSet
-from .schemas import EmbeddingRequestSchema, EmbeddingSchema
-from .roberta import roberta_embeddings
+from .schemas import EmbeddingRequestSchema, EmbeddingSchema, ActivityLabelsResponseSchema, ActivityLabelsRequestSchema
+from .core import roberta_embeddings
+
+import kmedoids
+from sklearn.metrics.pairwise import euclidean_distances
+
 
 import uuid
 import numpy as np
@@ -29,6 +33,11 @@ blp_distance = Blueprint(
     description='Computes the distances between computed embeddings.'
 )
 
+blp_activity_label_generation = Blueprint(
+    'activity-labels', 'activity-labels', url_prefix='/activitylabels',
+    description="Generates unique activity labels for a set of TimelineEntities."
+)
+
 # Define deep_model
 deep_model = roberta_embeddings.RoBERTa()
 
@@ -49,6 +58,43 @@ def dist(v1, v2):
 '''
 API
 '''
+@blp_activity_label_generation.route('/')
+class ActivityLabels(MethodView):
+
+    @blp_activity_label_generation.arguments(ActivityLabelsRequestSchema)
+    @blp_activity_label_generation.response(200,ActivityLabelsResponseSchema)
+    def post(self, request):
+        print("Processing activity labels request")
+        embeddings_objects = [Embedding(id=x['id'], tensor=deep_model.embed(x['terms'], x['id'])) for x in request['entities']]
+        _embeddings = [x.tensor for x in embeddings_objects]
+        all_embeddings = np.vstack(_embeddings)
+
+        distances = euclidean_distances(all_embeddings)
+
+        result = kmedoids.fasterpam(diss=distances, medoids=50, max_iter=100, n_cpu=15)
+        print(result.labels)
+
+
+        results = [kmedoids.fasterpam(diss=distances, medoids=x, max_iter=100, n_cpu=15) for x in range(2,len(embeddings_objects)//2)]
+
+        results.sort(key=lambda x: x.loss)
+
+        results_summary = [x.loss for x in results]
+        print(results_summary)
+
+        print(results[0].labels, results[0].labels.shape)
+
+        mapping_entries = [(request['entities'][index]['id'], int(cluster)) for index, cluster in enumerate(results[0].labels)]
+        response = {
+            "id": request['id'],
+            "mappings":dict(mapping_entries),
+            "cluster_info": {}
+        }
+
+        print('from ', len(request['entities']), ' produced ', np.unique(results[0].labels).shape[0], ' unique activity labels')
+
+        return response 
+
 @blp_distance.route('/')
 class Distance(MethodView):
     def get(self):
@@ -100,4 +146,7 @@ class Embeddings(MethodView):
 
 api.register_blueprint(blp)
 api.register_blueprint(blp_distance)
+api.register_blueprint(blp_activity_label_generation)
 
+if __name__ == "__main__":
+    app.run(host="0.0.0.0")

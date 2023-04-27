@@ -1,6 +1,7 @@
 import torch
 import numpy as np
 import sys
+import os.path
 
 from .utils import compute_centroid
 
@@ -54,6 +55,13 @@ class RoBERTa:
     A 1-d embedding of the entity
     '''
     def embed(self, terms, id):
+
+        #compute embeddings file path
+        embedding_fp = 'embeddings/' + id + ".npy"
+        #load embbedding from file if it is already computed.
+        if os.path.isfile(embedding_fp):
+            print('found embedding file: ', embedding_fp)
+            return np.load(embedding_fp)
 
         embeddings = self._compute_embeddings(terms)
         embedding = compute_centroid(embeddings)
