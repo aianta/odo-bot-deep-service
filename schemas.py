@@ -21,6 +21,8 @@ class ActivityLabelsRequestSchema(ma.Schema):
     entities = ma.fields.List(ma.fields.Dict())
 
 class ActivityLabelsResponseSchema(ma.Schema):
+    class Meta:
+        unknown = INCLUDE
     id = ma.fields.String() 
-    mappings = ma.fields.Dict() #An object that returns key-value pairs where the keys are timeline entity ids and the values are cluster ids.
-    cluster_info = ma.fields.Dict() #An object with key value pairs where the keys are cluster ids and the values are information about that cluster.
+    # mappings = ma.fields.Dict() #An object that returns key-value pairs where the keys are timeline entity ids and the values are cluster ids.
+    # cluster_info = ma.fields.Dict() #An object with key value pairs where the keys are cluster ids and the values are information about that cluster.

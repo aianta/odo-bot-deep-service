@@ -55,6 +55,55 @@ for entry in os.listdir(embeddings_base_path):
 
 def dist(v1, v2):
     return float(np.linalg.norm(v1 - v2))
+
+def organize_entities(entities):
+    '''
+    {
+        <symbol>: [<entities with that symbol>],
+        ...
+    }
+    '''
+    entities_by_symbol = {}
+
+    for entity in entities:
+        symbol = entity['symbol']
+
+        if symbol in entities_by_symbol:
+            entity_list = entities_by_symbol[symbol]
+            entity_list.append(entity)
+        else:
+            # Create the entity list for this symbol if it doesn't exist
+            entity_list = []
+            entities_by_symbol[symbol] = entity_list
+            entity_list.append(entity)
+
+    
+    return entities_by_symbol
+
+def compute_activity_mappings(entities, symbol):
+    embeddings_objects = [Embedding(id=x['id'], tensor=deep_model.embed(x['terms'], x['id'])) for x in entities]
+    _embeddings = [x.tensor for x in embeddings_objects]
+    all_embeddings = np.vstack(_embeddings)
+
+    distances = euclidean_distances(all_embeddings)
+
+
+    results = [kmedoids.fasterpam(diss=distances, medoids=x, max_iter=100, n_cpu=15) for x in range(2,len(embeddings_objects)//2)]
+
+    results.sort(key=lambda x: x.loss)
+
+    results_summary = [x.loss for x in results]
+    print(results_summary)
+
+    print(results[0].labels, results[0].labels.shape)
+
+    mapping_entries = [(entities[index]['id'], symbol + "#" + str(int(cluster))) for index, cluster in enumerate(results[0].labels)]
+
+    print('from ', len(entities), ' produced ', np.unique(results[0].labels).shape[0], ' unique activity labels')
+
+    return dict(mapping_entries)
+
+
 '''
 API
 '''
@@ -62,36 +111,24 @@ API
 class ActivityLabels(MethodView):
 
     @blp_activity_label_generation.arguments(ActivityLabelsRequestSchema)
-    @blp_activity_label_generation.response(200,ActivityLabelsResponseSchema)
+    # @blp_activity_label_generation.response(200,ActivityLabelsResponseSchema)
     def post(self, request):
         print("Processing activity labels request")
-        embeddings_objects = [Embedding(id=x['id'], tensor=deep_model.embed(x['terms'], x['id'])) for x in request['entities']]
-        _embeddings = [x.tensor for x in embeddings_objects]
-        all_embeddings = np.vstack(_embeddings)
+        entities_by_symbol = organize_entities(request['entities'])
 
-        distances = euclidean_distances(all_embeddings)
+        print(entities_by_symbol.keys())
 
-        result = kmedoids.fasterpam(diss=distances, medoids=50, max_iter=100, n_cpu=15)
-        print(result.labels)
-
-
-        results = [kmedoids.fasterpam(diss=distances, medoids=x, max_iter=100, n_cpu=15) for x in range(2,len(embeddings_objects)//2)]
-
-        results.sort(key=lambda x: x.loss)
-
-        results_summary = [x.loss for x in results]
-        print(results_summary)
-
-        print(results[0].labels, results[0].labels.shape)
-
-        mapping_entries = [(request['entities'][index]['id'], int(cluster)) for index, cluster in enumerate(results[0].labels)]
         response = {
-            "id": request['id'],
-            "mappings":dict(mapping_entries),
-            "cluster_info": {}
+            "id": request['id']
         }
 
-        print('from ', len(request['entities']), ' produced ', np.unique(results[0].labels).shape[0], ' unique activity labels')
+        mappings = {}
+        for symbol in entities_by_symbol.keys():
+            _mappings = compute_activity_mappings(entities_by_symbol[symbol], symbol)
+            mappings.update(_mappings)
+
+        response['mappings'] = mappings
+        
 
         return response 
 

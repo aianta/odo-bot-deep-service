@@ -11,4 +11,6 @@ Currently the service provides following functionality:
 
 ## Usage
 
-`flask run`
+Activate the conda environment (`roberta` in my case) and execute: 
+
+`flask run --host=0.0.0.0`
