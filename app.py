@@ -1,13 +1,15 @@
-from flask import Flask
+from flask import Flask, send_file
 from flask.views import MethodView, View
 import marshmallow as ma
 from flask_smorest import Api, Blueprint, abort
+from flask import request
 
 from .model import Embedding, EmbeddingSet
 from .schemas import EmbeddingRequestSchema, EmbeddingSchema, ActivityLabelsResponseSchema, ActivityLabelsRequestSchema
 from .core import roberta_embeddings
 
 import kmedoids
+import pm4py
 from sklearn.metrics.pairwise import euclidean_distances
 
 
@@ -36,6 +38,11 @@ blp_distance = Blueprint(
 blp_activity_label_generation = Blueprint(
     'activity-labels', 'activity-labels', url_prefix='/activitylabels',
     description="Generates unique activity labels for a set of TimelineEntities."
+)
+
+blp_make_model = Blueprint(
+    'model', 'model', url_prefix='/model',
+    description="Generates process model from xes file."
 )
 
 # Define deep_model
@@ -84,13 +91,21 @@ def compute_activity_mappings(entities, symbol):
     embeddings_objects = [Embedding(id=x['id'], tensor=deep_model.embed(x['terms'], x['id'])) for x in entities]
     _embeddings = [x.tensor for x in embeddings_objects]
     all_embeddings = np.vstack(_embeddings)
+    
+    print('all_embeddings shape:', all_embeddings.shape)
 
     distances = euclidean_distances(all_embeddings)
 
-
-    results = [kmedoids.fasterpam(diss=distances, medoids=x, max_iter=100, n_cpu=15) for x in range(2,len(embeddings_objects)//2)]
+    '''
+    If we send 3 objects for clustering 3//2 = 1 and therefore the range function or the clustering fails, so let's avoid that.
+    '''
+    if len(embeddings_objects) < 4:
+        results = [kmedoids.fasterpam(diss=distances, medoids=x, max_iter=100, n_cpu=15) for x in range(2,len(embeddings_objects))]
+    else:
+        results = [kmedoids.fasterpam(diss=distances, medoids=x, max_iter=100, n_cpu=15) for x in range(2,len(embeddings_objects)//2)]
 
     results.sort(key=lambda x: x.loss)
+
 
     results_summary = [x.loss for x in results]
     print(results_summary)
@@ -107,6 +122,38 @@ def compute_activity_mappings(entities, symbol):
 '''
 API
 '''
+@blp_make_model.route('/')
+class MakeModel(MethodView):
+
+    def post(self):
+        # Persist the xes file to a temporary location
+        temp_file = open('temp.xes', "wb")
+        print(request.data)
+        temp_file.write(request.data)
+        temp_file.flush()
+        temp_file.close()
+
+        eventlog = pm4py.read_xes("temp.xes")
+        eventlog = pm4py.format_dataframe(eventlog, case_id="case:id", activity_key="activity", timestamp_key="timestamp")
+        start_activities = pm4py.get_start_activities(eventlog)
+        end_activities = pm4py.get_end_activities(eventlog)
+
+        print("Start activities: {}\nEnd activities: {}".format(start_activities, end_activities))
+
+        process_tree = pm4py.discover_process_tree_inductive(eventlog)
+        bpmn_model = pm4py.convert_to_bpmn(process_tree)
+
+        pm4py.save_vis_bpmn(bpmn_model, "out.png")
+        pm4py.save_vis_process_tree(process_tree, "out_tree.png")
+
+        return send_file(
+            "out.png",
+            "image/png"
+        )
+
+
+
+
 @blp_activity_label_generation.route('/')
 class ActivityLabels(MethodView):
 
@@ -124,6 +171,7 @@ class ActivityLabels(MethodView):
 
         mappings = {}
         for symbol in entities_by_symbol.keys():
+            print("Computing activity label mappings for symbol ", symbol)
             _mappings = compute_activity_mappings(entities_by_symbol[symbol], symbol)
             mappings.update(_mappings)
 
@@ -184,6 +232,7 @@ class Embeddings(MethodView):
 api.register_blueprint(blp)
 api.register_blueprint(blp_distance)
 api.register_blueprint(blp_activity_label_generation)
+api.register_blueprint(blp_make_model)
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0")

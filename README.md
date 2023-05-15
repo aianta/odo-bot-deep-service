@@ -14,3 +14,7 @@ Currently the service provides following functionality:
 Activate the conda environment (`roberta` in my case) and execute: 
 
 `flask run --host=0.0.0.0`
+
+Also requires graphviz for process model visualization, install with:
+
+`sudo apt-get install graphviz`
