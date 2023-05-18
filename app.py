@@ -11,6 +11,7 @@ from .core import roberta_embeddings
 import kmedoids
 import pm4py
 from sklearn.metrics.pairwise import euclidean_distances
+from kneed import KneeLocator
 
 
 import uuid
@@ -104,17 +105,36 @@ def compute_activity_mappings(entities, symbol):
     else:
         results = [kmedoids.fasterpam(diss=distances, medoids=x, max_iter=100, n_cpu=15) for x in range(2,len(embeddings_objects)//2)]
 
-    results.sort(key=lambda x: x.loss)
+    '''
+    Use knee method to determine optimal clustering
+    https://pypi.org/project/kneed/
+    https://towardsdatascience.com/detecting-knee-elbow-points-in-a-graph-d13fc517a63c
+
+    Allegedly S=0 is best in an offline setting.
+    '''
+    losses = [x.loss for x in results]
+    k_values = [i for i in range(2, len(results) + 2)]
+
+    print("losses: ", losses)
+    print("k_values:", k_values)
+
+    kneedle = KneeLocator(k_values, losses,S=0, curve='convex', direction='decreasing')
+    optimal_k = kneedle.elbow
+    print("optimal K: ", optimal_k)
+
+    #results.sort(key=lambda x: x.loss)
+    optimal_result = results[optimal_k-2] # Optimal k index is optimal_k-2 because at index [0] k = 2
+    
+    print("optimal result: ", optimal_result.labels, optimal_result.labels.shape)
 
 
     results_summary = [x.loss for x in results]
     print(results_summary)
 
-    print(results[0].labels, results[0].labels.shape)
 
-    mapping_entries = [(entities[index]['id'], symbol + "#" + str(int(cluster))) for index, cluster in enumerate(results[0].labels)]
+    mapping_entries = [(entities[index]['id'], symbol + "#" + str(int(cluster))) for index, cluster in enumerate(optimal_result.labels)]
 
-    print('from ', len(entities), ' produced ', np.unique(results[0].labels).shape[0], ' unique activity labels')
+    print('from ', len(entities), ' produced ', np.unique(optimal_result.labels).shape[0], ' unique activity labels')
 
     return dict(mapping_entries)
 
