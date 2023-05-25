@@ -63,6 +63,7 @@ class RoBERTa:
             print('found embedding file: ', embedding_fp)
             return np.load(embedding_fp)
 
+        print("Computing embeddings for ", id)
         embeddings = self._compute_embeddings(terms)
         embedding = compute_centroid(embeddings)
         

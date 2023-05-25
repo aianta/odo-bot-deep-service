@@ -17,6 +17,13 @@ from kneed import KneeLocator
 import uuid
 import numpy as np
 import os
+import base64
+
+bpmn_output = "bpmn_out.png"
+tree_output = "tree_out.png"
+dfg_output = "dfg_out.png"
+petri_net_output = "petri_net_inductive_out.png"
+transition_system_output = "transition_system_out.png"
 
 # TODO: https://stackoverflow.com/questions/68619341/how-should-the-startup-of-a-flask-app-be-structured
 
@@ -118,10 +125,22 @@ def compute_activity_mappings(entities, symbol):
     print("losses: ", losses)
     print("k_values:", k_values)
 
+    if len(losses) <= 2: # can't do knee on fewer than 3 data points
+        # results.sort(key=lambda x: x.loss)
+        # optimal_result = results[0]
+
+        #TODO: this is hyper messy, please refactor
+        mapping_entries = [(entities[index]['id'], symbol + "#0") for index in range(0,len(entities))]
+        return dict(mapping_entries)
+
+
     kneedle = KneeLocator(k_values, losses,S=0, curve='convex', direction='decreasing')
-    optimal_k = kneedle.elbow
+    optimal_k = kneedle.elbow 
     print("optimal K: ", optimal_k)
 
+
+
+ 
     #results.sort(key=lambda x: x.loss)
     optimal_result = results[optimal_k-2] # Optimal k index is optimal_k-2 because at index [0] k = 2
     
@@ -162,14 +181,32 @@ class MakeModel(MethodView):
 
         process_tree = pm4py.discover_process_tree_inductive(eventlog)
         bpmn_model = pm4py.convert_to_bpmn(process_tree)
+        dfg, start, end = pm4py.discover_dfg(eventlog)
+        petri_net, initial, final = pm4py.discover_petri_net_inductive(eventlog)
+        transition_system = pm4py.discover_transition_system(eventlog)
 
-        pm4py.save_vis_bpmn(bpmn_model, "out.png")
-        pm4py.save_vis_process_tree(process_tree, "out_tree.png")
+        pm4py.save_vis_bpmn(bpmn_model, bpmn_output)
+        pm4py.save_vis_process_tree(process_tree, tree_output)
+        pm4py.save_vis_dfg(dfg, start, end, dfg_output)
+        pm4py.save_vis_petri_net(petri_net, initial, final, petri_net_output)
+        pm4py.save_vis_transition_system(transition_system, transition_system_output)
 
-        return send_file(
-            "out.png",
-            "image/png"
-        )
+        with open(bpmn_output, 'rb') as bpmn_file, open(tree_output, 'rb') as tree_file, open(dfg_output, 'rb') as dfg_file, open(petri_net_output, 'rb') as petri_file, open(transition_system_output, 'rb') as transition_file:
+            bpmn_bytes = bpmn_file.read()
+            tree_bytes = tree_file.read()
+            dfg_bytes = dfg_file.read()
+            petri_bytes = petri_file.read()
+            transition_bytes = transition_file.read()
+
+            response = {
+                "bpmn": base64.b64encode(bpmn_bytes).decode('utf-8'),
+                "tree": base64.b64encode(tree_bytes).decode('utf-8'),
+                "dfg":  base64.b64encode(dfg_bytes).decode('utf-8'),
+                "petri": base64.b64encode(petri_bytes).decode('utf-8'),
+                "transition": base64.b64encode(transition_bytes).decode('utf-8')
+            }
+
+            return response
 
 
 

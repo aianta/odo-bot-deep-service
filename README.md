@@ -18,3 +18,5 @@ Activate the conda environment (`roberta` in my case) and execute:
 Also requires graphviz for process model visualization, install with:
 
 `sudo apt-get install graphviz`
+
+If you run into `GLIBCXX_3.4.30' not found` error try: `source fix_libs.sh`
