@@ -12,6 +12,8 @@ import kmedoids
 import pm4py
 from sklearn.metrics.pairwise import euclidean_distances
 from kneed import KneeLocator
+import matplotlib.pyplot as plt
+
 
 
 import uuid
@@ -131,12 +133,27 @@ def compute_activity_mappings(entities, symbol):
 
         #TODO: this is hyper messy, please refactor
         mapping_entries = [(entities[index]['id'], symbol + "#0") for index in range(0,len(entities))]
-        return dict(mapping_entries)
+        return dict(mapping_entries), None
 
 
     kneedle = KneeLocator(k_values, losses,S=0, curve='convex', direction='decreasing')
     optimal_k = kneedle.elbow 
     print("optimal K: ", optimal_k)
+
+    print("length of losses array: ", len(losses))
+    print("length of k_values array: ", len(k_values))
+    
+    # Create a figure showing losses vs k-values. We'll use this for auditing/sanity checking. 
+    fig_file_name = "clustering_results_"+symbol+".png"
+    fig,ax = plt.subplots()
+    #ax.plot(losses, k_values)
+    ax.scatter(x=k_values, y=losses)
+    ax.set(xlabel="# of clusters", ylabel="Loss (sum of deviations)")
+    ax.set_yscale('log')
+    ax.set_xticks(np.arange(min(k_values), max(k_values)+1, 1.0))
+    ax.axvline(x=optimal_k, color='b')
+    fig.tight_layout() #avoid cutting off axis labels.
+    fig.savefig(fig_file_name)
 
 
 
@@ -155,7 +172,7 @@ def compute_activity_mappings(entities, symbol):
 
     print('from ', len(entities), ' produced ', np.unique(optimal_result.labels).shape[0], ' unique activity labels')
 
-    return dict(mapping_entries)
+    return dict(mapping_entries), fig_file_name
 
 
 '''
@@ -229,8 +246,15 @@ class ActivityLabels(MethodView):
         mappings = {}
         for symbol in entities_by_symbol.keys():
             print("Computing activity label mappings for symbol ", symbol)
-            _mappings = compute_activity_mappings(entities_by_symbol[symbol], symbol)
+            _mappings, fig_file_name = compute_activity_mappings(entities_by_symbol[symbol], symbol)
             mappings.update(_mappings)
+
+            if fig_file_name is not None:
+            # add clustering elbow chart to reponse
+                with open(fig_file_name, 'rb') as fig_file: 
+                    fig_file_bytes = fig_file.read()
+
+                    response['clustering_results_' + symbol] = base64.b64encode(fig_file_bytes).decode('utf-8')
 
         response['mappings'] = mappings
         
