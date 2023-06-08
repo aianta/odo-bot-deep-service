@@ -7,6 +7,7 @@ from flask import request
 from .model import Embedding, EmbeddingSet
 from .schemas import EmbeddingRequestSchema, EmbeddingSchema, ActivityLabelsResponseSchema, ActivityLabelsRequestSchema
 from .core import roberta_embeddings
+from .core.embeddings_v2 import Embeddings_v2
 
 import kmedoids
 import pm4py
@@ -15,7 +16,7 @@ from kneed import KneeLocator
 import matplotlib.pyplot as plt
 
 
-
+import json
 import uuid
 import numpy as np
 import os
@@ -45,6 +46,11 @@ blp_distance = Blueprint(
     description='Computes the distances between computed embeddings.'
 )
 
+blp_activity_label_generation_v2 = Blueprint(
+    'activity-labels-v2', 'activity-labels-v2', url_prefix='/activitylabels/v2',
+    description="Generates unique activity labels for a set of TimelineEntities using enhanced embedding techniques."
+)
+
 blp_activity_label_generation = Blueprint(
     'activity-labels', 'activity-labels', url_prefix='/activitylabels',
     description="Generates unique activity labels for a set of TimelineEntities."
@@ -57,6 +63,7 @@ blp_make_model = Blueprint(
 
 # Define deep_model
 deep_model = roberta_embeddings.RoBERTa()
+embedding_logic_v2 = Embeddings_v2(deep_model) 
 
 # Declare embeddings dict
 embeddings = {}
@@ -279,6 +286,158 @@ class Distance(MethodView):
 
         return response
 
+def compute_activity_mappings_v2(entities, symbol):
+    
+    # Convert entities to triple form
+    preprocessed_entitites = [ (entity['id'],preprocess_entity(entity, symbol)) for entity in entities ]
+    
+    embeddings_objects = [Embedding(id=entry[0], tensor=embedding_logic_v2.embed(event_type=symbol, features=entry[1], count=count,total=len(preprocessed_entitites) )) for count,entry in enumerate(preprocessed_entitites)]
+    _embeddings = [x.tensor for x in embeddings_objects]
+    all_embeddings = np.vstack(_embeddings)
+
+    print('all_embeddings shape:', all_embeddings.shape)
+
+    distances = euclidean_distances(all_embeddings)
+    
+    '''
+    If we send 3 objects for clustering 3//2 = 1 and therefore the range function or the clustering fails, so let's avoid that.
+    '''
+    if len(embeddings_objects) < 4:
+        results = [kmedoids.fasterpam(diss=distances, medoids=x, max_iter=100, n_cpu=15) for x in range(2,len(embeddings_objects))]
+    else:
+        results = [kmedoids.fasterpam(diss=distances, medoids=x, max_iter=100, n_cpu=15) for x in range(2,len(embeddings_objects)//2)]
+
+    '''
+    Use knee method to determine optimal clustering
+    https://pypi.org/project/kneed/
+    https://towardsdatascience.com/detecting-knee-elbow-points-in-a-graph-d13fc517a63c
+
+    Allegedly S=0 is best in an offline setting.
+    '''
+    losses = [x.loss for x in results]
+    k_values = [i for i in range(2, len(results) + 2)]
+
+    print("losses: ", losses)
+    print("k_values:", k_values)
+
+    if len(losses) <= 2: # can't do knee on fewer than 3 data points
+        # results.sort(key=lambda x: x.loss)
+        # optimal_result = results[0]
+
+        #TODO: this is hyper messy, please refactor
+        mapping_entries = [(entities[index]['id'], symbol + "#0") for index in range(0,len(entities))]
+        return dict(mapping_entries), None
+
+
+    kneedle = KneeLocator(k_values, losses,S=0, curve='convex', direction='decreasing')
+    optimal_k = kneedle.elbow 
+    print("optimal K: ", optimal_k)
+
+    print("length of losses array: ", len(losses))
+    print("length of k_values array: ", len(k_values))
+    
+    # Create a figure showing losses vs k-values. We'll use this for auditing/sanity checking. 
+    fig_file_name = "clustering_results_"+symbol+".png"
+    fig,ax = plt.subplots()
+    #ax.plot(losses, k_values)
+    ax.scatter(x=k_values, y=losses)
+    ax.set(xlabel="# of clusters", ylabel="Loss (sum of deviations)")
+    ax.set_yscale('log')
+    ax.set_xticks(np.arange(min(k_values), max(k_values)+1, 1.0))
+    ax.axvline(x=optimal_k, color='b')
+    fig.tight_layout() #avoid cutting off axis labels.
+    fig.savefig(fig_file_name)
+
+
+
+ 
+    #results.sort(key=lambda x: x.loss)
+    optimal_result = results[optimal_k-2] # Optimal k index is optimal_k-2 because at index [0] k = 2
+    
+    print("optimal result: ", optimal_result.labels, optimal_result.labels.shape)
+
+
+    results_summary = [x.loss for x in results]
+    print(results_summary)
+
+
+    mapping_entries = [(entities[index]['id'], symbol + "#" + str(int(cluster))) for index, cluster in enumerate(optimal_result.labels)]
+
+    print('from ', len(entities), ' produced ', np.unique(optimal_result.labels).shape[0], ' unique activity labels')
+
+    return dict(mapping_entries), fig_file_name
+
+
+def preprocess_entity(entity, symbol):
+    '''
+    Need to get to [(<name>, <data>, weight>)] form
+    '''
+    print(json.dumps(entity, indent=4))
+    feature_list = []
+
+    if 'size' in entity:
+        feature_list.append(('size', entity['size'], 1.0))
+    
+    if 'terms' in entity and len(entity['terms']) > 0:
+        feature_list.append(('terms', entity['terms'], 1.0))
+    
+    if 'cssClassTerms' in entity and len(entity['cssClassTerms']) > 0:
+        feature_list.append(('cssClassTerms', entity['cssClassTerms'], 1.0))
+    
+    if 'idTerms' in entity and len(entity['idTerms']) > 0:
+        feature_list.append(('idTerms', entity['idTerms'], 1.0))
+
+    '''
+    Symbol specific components
+    '''
+    if symbol == 'CE':
+        pass
+
+    if symbol == 'E':
+        pass
+
+    if symbol == 'DE':
+        pass
+
+
+    return feature_list
+
+@blp_activity_label_generation_v2.route('/')
+class EnhancedEmbeddings(MethodView):
+
+    @blp_activity_label_generation_v2.arguments(ActivityLabelsRequestSchema)
+    def post(self, request):
+        print("Processing activity labels request")
+        entities_by_symbol = organize_entities(request['entities'])
+
+        print(entities_by_symbol.keys())
+
+        response = {
+            "id": request['id']
+        }
+
+        mappings = {}
+        for symbol in entities_by_symbol.keys():
+            print("Computing activity label mappings for symbol ", symbol)
+
+            _mappings, fig_file_name = compute_activity_mappings_v2(entities_by_symbol[symbol], symbol)
+            mappings.update(_mappings)
+
+            if fig_file_name is not None:
+            # add clustering elbow chart to reponse
+                with open(fig_file_name, 'rb') as fig_file: 
+                    fig_file_bytes = fig_file.read()
+
+                    response['clustering_results_' + symbol] = base64.b64encode(fig_file_bytes).decode('utf-8')
+
+        response['mappings'] = mappings
+        
+
+        return response 
+
+
+
+
 @blp.route('/')
 class Embeddings(MethodView):
 
@@ -292,7 +451,7 @@ class Embeddings(MethodView):
         print(request)
 
         if(request['id'] not in embeddings):
-            # Extract termsfrom request body
+            # Extract terms from request body
             terms = request['terms']
 
             # Create embedding object
@@ -313,6 +472,7 @@ class Embeddings(MethodView):
 api.register_blueprint(blp)
 api.register_blueprint(blp_distance)
 api.register_blueprint(blp_activity_label_generation)
+api.register_blueprint(blp_activity_label_generation_v2)
 api.register_blueprint(blp_make_model)
 
 if __name__ == "__main__":

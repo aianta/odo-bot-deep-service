@@ -38,6 +38,7 @@ class RoBERTa:
         # Run the tokens through roberta
         layers = map (lambda tokens: RoBERTa.model.extract_features(tokens, return_all_hiddens=True)[-1], token_set)
 
+
         # Average the tensors for each token together to produce 1-d embedding for the whole term.
         # see: https://github.com/BramVanroy/bert-for-inference/blob/master/introduction-to-bert.ipynb
         embeddings = map(lambda layer: torch.mean(layer, dim=1).squeeze(), layers)
