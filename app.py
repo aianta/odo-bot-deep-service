@@ -14,13 +14,14 @@ import pm4py
 from sklearn.metrics.pairwise import euclidean_distances
 from kneed import KneeLocator
 import matplotlib.pyplot as plt
-
+from sklearn.decomposition import PCA
 
 import json
 import uuid
 import numpy as np
 import os
 import base64
+import math
 
 bpmn_output = "bpmn_out.png"
 tree_output = "tree_out.png"
@@ -77,43 +78,23 @@ for entry in os.listdir(embeddings_base_path):
         tensor = np.load(f) 
         embeddings[id] = Embedding(id=id, tensor=tensor)
 
-def dist(v1, v2):
-    return float(np.linalg.norm(v1 - v2))
-
-def organize_entities(entities):
-    '''
-    {
-        <symbol>: [<entities with that symbol>],
-        ...
-    }
-    '''
-    entities_by_symbol = {}
-
-    for entity in entities:
-        symbol = entity['symbol']
-
-        if symbol in entities_by_symbol:
-            entity_list = entities_by_symbol[symbol]
-            entity_list.append(entity)
-        else:
-            # Create the entity list for this symbol if it doesn't exist
-            entity_list = []
-            entities_by_symbol[symbol] = entity_list
-            entity_list.append(entity)
-
+'''
+Processes embedded objects into activity labels using clustering techniques.
+'''
+def _process_embeddings(entities, embeddings_objects, symbol):
     
-    return entities_by_symbol
-
-def compute_activity_mappings(entities, symbol):
-    embeddings_objects = [Embedding(id=x['id'], tensor=deep_model.embed(x['terms'], x['id'])) for x in entities]
     _embeddings = [x.tensor for x in embeddings_objects]
     all_embeddings = np.vstack(_embeddings)
-    
+
     print('all_embeddings shape:', all_embeddings.shape)
 
-    distances = euclidean_distances(all_embeddings)
 
+    distances = euclidean_distances(all_embeddings)
+    
     '''
+    K-medoids documentation:
+    https://python-kmedoids.readthedocs.io/en/latest/
+
     If we send 3 objects for clustering 3//2 = 1 and therefore the range function or the clustering fails, so let's avoid that.
     '''
     if len(embeddings_objects) < 4:
@@ -150,22 +131,25 @@ def compute_activity_mappings(entities, symbol):
     print("length of losses array: ", len(losses))
     print("length of k_values array: ", len(k_values))
     
+    '''
+    NOTE: this is important! Odo bot's logpreprocessor looks for this prefix in the response
+    to properly persist the artifacts.
+    '''
+    fig_name_prefix = "clustering_results_"
+
     # Create a figure showing losses vs k-values. We'll use this for auditing/sanity checking. 
-    fig_file_name = "clustering_results_"+symbol+".png"
+    fig_file_name = fig_name_prefix+symbol+".png"
     fig,ax = plt.subplots()
     #ax.plot(losses, k_values)
     ax.scatter(x=k_values, y=losses)
     ax.set(xlabel="# of clusters", ylabel="Loss (sum of deviations)")
     ax.set_yscale('log')
-    ax.set_xticks(np.arange(min(k_values), max(k_values)+1, 1.0))
+    ax.set_xticks(np.arange(min(k_values), max(k_values)+1, math.ceil(max(k_values)/10) if max(k_values) > 10 else 1.0 ))
     ax.axvline(x=optimal_k, color='b')
     fig.tight_layout() #avoid cutting off axis labels.
     fig.savefig(fig_file_name)
 
-
-
- 
-    #results.sort(key=lambda x: x.loss)
+    # Choose optimal clustering and produce mapping result
     optimal_result = results[optimal_k-2] # Optimal k index is optimal_k-2 because at index [0] k = 2
     
     print("optimal result: ", optimal_result.labels, optimal_result.labels.shape)
@@ -174,12 +158,107 @@ def compute_activity_mappings(entities, symbol):
     results_summary = [x.loss for x in results]
     print(results_summary)
 
+    '''
+    Visualize PCA for analysis.
+    https://machinelearningmastery.com/principal-component-analysis-for-visualization/
+
+    Since we're normalizing vectors during the embedding process, I don't think we'll need to the standard scalar normalization here.
+    '''
+    pca_fig_name = fig_name_prefix + symbol + "_PCA.png"
+
+    pca = PCA()
+    pca_embeddings_t = pca.fit_transform(all_embeddings)
+    pca_fig = plt.figure("PCA figure")
+    pca_plot = plt.scatter(pca_embeddings_t[:,0], pca_embeddings_t[:,1],c=optimal_result.labels)
+    plt.title("PCA for ("+symbol+") Clustering")
+    plt.legend(handles=pca_plot.legend_elements()[0], labels=list(np.unique(optimal_result.labels)))
+    pca_ax = pca_plot.axes
+    plt.text(-0.1,-0.2, "Top 5 VR: " + str(pca.explained_variance_ratio_[0:5]),transform=pca_ax.transAxes, va='bottom', ha='left', wrap=True)
+    pca_fig.tight_layout()
+    pca_fig.savefig(pca_fig_name)
+
+    print("VC: ", pca.explained_variance_ratio_)
 
     mapping_entries = [(entities[index]['id'], symbol + "#" + str(int(cluster))) for index, cluster in enumerate(optimal_result.labels)]
 
     print('from ', len(entities), ' produced ', np.unique(optimal_result.labels).shape[0], ' unique activity labels')
 
-    return dict(mapping_entries), fig_file_name
+    return dict(mapping_entries), fig_file_name, pca_fig_name
+
+
+def compute_activity_mappings_v2(entities, symbol):
+    
+    # Convert entities to triple form
+    preprocessed_entitites = [ (entity['id'],preprocess_entity(entity, symbol)) for entity in entities ]
+    
+    embeddings_objects = [Embedding(id=entry[0], tensor=embedding_logic_v2.embed(features=entry[1], count=count,total=len(preprocessed_entitites) )) for count,entry in enumerate(preprocessed_entitites)]
+    return _process_embeddings(entities, embeddings_objects, symbol)
+
+
+def preprocess_entity(entity, symbol):
+    '''
+    Need to get to [(<name>, <data>, weight>)] form
+    '''
+    print(json.dumps(entity, indent=4))
+    feature_list = []
+
+    if 'size' in entity:
+        feature_list.append(('size', entity['size'], 1.0))
+    
+    if 'terms' in entity and len(entity['terms']) > 0:
+        feature_list.append(('terms', entity['terms'], 1.0))
+    
+    if 'cssClassTerms' in entity and len(entity['cssClassTerms']) > 0:
+        feature_list.append(('cssClassTerms', entity['cssClassTerms'], 1.0))
+    
+    if 'idTerms' in entity and len(entity['idTerms']) > 0:
+        feature_list.append(('idTerms', entity['idTerms'], 1.0))
+
+    '''
+    Symbol specific components
+    '''
+    if symbol == 'CE':
+        pass
+
+    if symbol == 'E':
+        pass
+
+    if symbol == 'DE':
+        pass
+
+
+    return feature_list
+
+def dist(v1, v2):
+    return float(np.linalg.norm(v1 - v2))
+
+def organize_entities(entities):
+    '''
+    {
+        <symbol>: [<entities with that symbol>],
+        ...
+    }
+    '''
+    entities_by_symbol = {}
+
+    for entity in entities:
+        symbol = entity['symbol']
+
+        if symbol in entities_by_symbol:
+            entity_list = entities_by_symbol[symbol]
+            entity_list.append(entity)
+        else:
+            # Create the entity list for this symbol if it doesn't exist
+            entity_list = []
+            entities_by_symbol[symbol] = entity_list
+            entity_list.append(entity)
+
+    
+    return entities_by_symbol
+
+def compute_activity_mappings(entities, symbol):
+    embeddings_objects = [Embedding(id=x['id'], tensor=deep_model.embed(x['terms'], x['id'])) for x in entities]
+    return _process_embeddings(entities, embeddings_objects, symbol)
 
 
 '''
@@ -253,7 +332,7 @@ class ActivityLabels(MethodView):
         mappings = {}
         for symbol in entities_by_symbol.keys():
             print("Computing activity label mappings for symbol ", symbol)
-            _mappings, fig_file_name = compute_activity_mappings(entities_by_symbol[symbol], symbol)
+            _mappings, fig_file_name, pca_file_name = compute_activity_mappings(entities_by_symbol[symbol], symbol)
             mappings.update(_mappings)
 
             if fig_file_name is not None:
@@ -262,6 +341,12 @@ class ActivityLabels(MethodView):
                     fig_file_bytes = fig_file.read()
 
                     response['clustering_results_' + symbol] = base64.b64encode(fig_file_bytes).decode('utf-8')
+            # add PCA chart to response
+            if pca_file_name is not None:
+                with open(pca_file_name, 'rb') as pca_file:
+                    pca_file_bytes = pca_file.read()
+
+                    response['clustering_results_' + symbol + '_PCA'] = base64.b64encode(pca_file_bytes).decode('utf-8')
 
         response['mappings'] = mappings
         
@@ -285,122 +370,8 @@ class Distance(MethodView):
             response[triple[0]][triple[1]] = triple[2]
 
         return response
-
-def compute_activity_mappings_v2(entities, symbol):
     
-    # Convert entities to triple form
-    preprocessed_entitites = [ (entity['id'],preprocess_entity(entity, symbol)) for entity in entities ]
-    
-    embeddings_objects = [Embedding(id=entry[0], tensor=embedding_logic_v2.embed(event_type=symbol, features=entry[1], count=count,total=len(preprocessed_entitites) )) for count,entry in enumerate(preprocessed_entitites)]
-    _embeddings = [x.tensor for x in embeddings_objects]
-    all_embeddings = np.vstack(_embeddings)
 
-    print('all_embeddings shape:', all_embeddings.shape)
-
-    distances = euclidean_distances(all_embeddings)
-    
-    '''
-    If we send 3 objects for clustering 3//2 = 1 and therefore the range function or the clustering fails, so let's avoid that.
-    '''
-    if len(embeddings_objects) < 4:
-        results = [kmedoids.fasterpam(diss=distances, medoids=x, max_iter=100, n_cpu=15) for x in range(2,len(embeddings_objects))]
-    else:
-        results = [kmedoids.fasterpam(diss=distances, medoids=x, max_iter=100, n_cpu=15) for x in range(2,len(embeddings_objects)//2)]
-
-    '''
-    Use knee method to determine optimal clustering
-    https://pypi.org/project/kneed/
-    https://towardsdatascience.com/detecting-knee-elbow-points-in-a-graph-d13fc517a63c
-
-    Allegedly S=0 is best in an offline setting.
-    '''
-    losses = [x.loss for x in results]
-    k_values = [i for i in range(2, len(results) + 2)]
-
-    print("losses: ", losses)
-    print("k_values:", k_values)
-
-    if len(losses) <= 2: # can't do knee on fewer than 3 data points
-        # results.sort(key=lambda x: x.loss)
-        # optimal_result = results[0]
-
-        #TODO: this is hyper messy, please refactor
-        mapping_entries = [(entities[index]['id'], symbol + "#0") for index in range(0,len(entities))]
-        return dict(mapping_entries), None
-
-
-    kneedle = KneeLocator(k_values, losses,S=0, curve='convex', direction='decreasing')
-    optimal_k = kneedle.elbow 
-    print("optimal K: ", optimal_k)
-
-    print("length of losses array: ", len(losses))
-    print("length of k_values array: ", len(k_values))
-    
-    # Create a figure showing losses vs k-values. We'll use this for auditing/sanity checking. 
-    fig_file_name = "clustering_results_"+symbol+".png"
-    fig,ax = plt.subplots()
-    #ax.plot(losses, k_values)
-    ax.scatter(x=k_values, y=losses)
-    ax.set(xlabel="# of clusters", ylabel="Loss (sum of deviations)")
-    ax.set_yscale('log')
-    ax.set_xticks(np.arange(min(k_values), max(k_values)+1, 1.0))
-    ax.axvline(x=optimal_k, color='b')
-    fig.tight_layout() #avoid cutting off axis labels.
-    fig.savefig(fig_file_name)
-
-
-
- 
-    #results.sort(key=lambda x: x.loss)
-    optimal_result = results[optimal_k-2] # Optimal k index is optimal_k-2 because at index [0] k = 2
-    
-    print("optimal result: ", optimal_result.labels, optimal_result.labels.shape)
-
-
-    results_summary = [x.loss for x in results]
-    print(results_summary)
-
-
-    mapping_entries = [(entities[index]['id'], symbol + "#" + str(int(cluster))) for index, cluster in enumerate(optimal_result.labels)]
-
-    print('from ', len(entities), ' produced ', np.unique(optimal_result.labels).shape[0], ' unique activity labels')
-
-    return dict(mapping_entries), fig_file_name
-
-
-def preprocess_entity(entity, symbol):
-    '''
-    Need to get to [(<name>, <data>, weight>)] form
-    '''
-    print(json.dumps(entity, indent=4))
-    feature_list = []
-
-    if 'size' in entity:
-        feature_list.append(('size', entity['size'], 1.0))
-    
-    if 'terms' in entity and len(entity['terms']) > 0:
-        feature_list.append(('terms', entity['terms'], 1.0))
-    
-    if 'cssClassTerms' in entity and len(entity['cssClassTerms']) > 0:
-        feature_list.append(('cssClassTerms', entity['cssClassTerms'], 1.0))
-    
-    if 'idTerms' in entity and len(entity['idTerms']) > 0:
-        feature_list.append(('idTerms', entity['idTerms'], 1.0))
-
-    '''
-    Symbol specific components
-    '''
-    if symbol == 'CE':
-        pass
-
-    if symbol == 'E':
-        pass
-
-    if symbol == 'DE':
-        pass
-
-
-    return feature_list
 
 @blp_activity_label_generation_v2.route('/')
 class EnhancedEmbeddings(MethodView):
@@ -420,7 +391,7 @@ class EnhancedEmbeddings(MethodView):
         for symbol in entities_by_symbol.keys():
             print("Computing activity label mappings for symbol ", symbol)
 
-            _mappings, fig_file_name = compute_activity_mappings_v2(entities_by_symbol[symbol], symbol)
+            _mappings, fig_file_name, pca_file_name = compute_activity_mappings_v2(entities_by_symbol[symbol], symbol)
             mappings.update(_mappings)
 
             if fig_file_name is not None:
@@ -429,6 +400,13 @@ class EnhancedEmbeddings(MethodView):
                     fig_file_bytes = fig_file.read()
 
                     response['clustering_results_' + symbol] = base64.b64encode(fig_file_bytes).decode('utf-8')
+
+            # add PCA chart to response
+            if pca_file_name is not None:
+                with open(pca_file_name, 'rb') as pca_file:
+                    pca_file_bytes = pca_file.read()
+
+                    response['clustering_results_' + symbol + '_PCA'] = base64.b64encode(pca_file_bytes).decode('utf-8')
 
         response['mappings'] = mappings
         

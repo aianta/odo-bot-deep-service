@@ -11,19 +11,6 @@ class Embeddings_v2():
 
         self.model = roberta.model
 
-        self.clickEventHandler = None
-        self.dataEntryHandler = None
-        self.effectHandler = None
-
-        self.embedders = {
-            'CE': self.clickEventHandler,
-            'ClickEvent': self.clickEventHandler,
-            'DE': self.dataEntryHandler,
-            'DataEntry': self.dataEntryHandler,
-            'E': self.effectHandler,
-            'Effect': self.effectHandler
-        }
-
 
     '''
     Features should be a list of triples:
@@ -37,10 +24,8 @@ class Embeddings_v2():
     The 'event_type' parameter is used to define the type of underlying event being
     embedded. See the embedders dictionary in __init__ for valid options.
     '''
-    def embed(self, event_type, features, count, total):
-        print("empeding {}/{}".format(count, total))
-
-        handler = self.embedders[event_type]
+    def embed(self, features, count, total):
+        print("embedding {}/{}".format(count, total))
 
         int_components = [self.processIntComponent(x) for x in features if type(x[1]) == int]
         float_components = [self.processFloatComponent(x) for x in features if type(x[1]) == float]
