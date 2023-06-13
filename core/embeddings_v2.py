@@ -87,7 +87,7 @@ class Embeddings_v2():
     def embedListOfStrings(self, terms):
 
         # TODO: remove this once enhancements are complete or consider performance implications
-        terms = terms[0:10]
+        #terms = terms[0:10]
 
         # Encode terms to roberta tokens 
         token_set = [self.model.encode(term) for term in terms]
