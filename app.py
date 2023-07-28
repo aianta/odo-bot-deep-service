@@ -116,7 +116,7 @@ def _process_embeddings(entities, distances, symbol, data):
 
         #TODO: this is hyper messy, please refactor
         mapping_entries = [(entities[index]['id'], symbol + "#0") for index in range(0,len(entities))]
-        return dict(mapping_entries), None
+        return dict(mapping_entries), None, None, None, None
 
 
     kneedle = KneeLocator(k_values, losses,S=0, curve='convex', direction='decreasing')
@@ -190,22 +190,35 @@ def make_pca(figure_prefix, symbol, data, labels):
 
 def preprocess_entity(entity, symbol):
     '''
-    Need to get to [(<name>, <data>, weight>)] form
+    Need to get to [(<name>, <data>, weight/or size if data = None>)] form
     '''
     print(json.dumps(entity, indent=4))
     feature_list = []
 
-    if 'size' in entity:
-        feature_list.append(('size', entity['size'], 1.0))
+    # if 'size' in entity:
+    #     feature_list.append(('size', entity['size'], 1.0))
     
-    if 'terms' in entity and len(entity['terms']) > 0:
-        feature_list.append(('terms', entity['terms'], 1.0))
-    
+    if 'localizedTerms' in entity and len(entity['localizedTerms']) > 0:
+        feature_list.append(('localizedTerms', entity['localizedTerms'], 1.0))
+    else:
+        # only consider terms if 'localized terms' are not available.
+        if 'terms' in entity and len(entity['terms']) > 0:
+            feature_list.append(('terms', entity['terms'], 1.0))
+
+   
     if 'cssClassTerms' in entity and len(entity['cssClassTerms']) > 0:
         feature_list.append(('cssClassTerms', entity['cssClassTerms'], 1.0))
     
     if 'idTerms' in entity and len(entity['idTerms']) > 0:
         feature_list.append(('idTerms', entity['idTerms'], 1.0))
+
+    if 'previous' in entity and entity['previous']:
+        previous_features = preprocess_entity(entity['previous'], entity['previous']['symbol'])
+        feature_list = feature_list + previous_features
+
+    if 'next' in entity and entity['next']:
+        next_features = preprocess_entity(entity['next'], entity['next']['symbol'])    
+        feature_list = feature_list + next_features
 
     '''
     Symbol specific components
@@ -235,10 +248,15 @@ def events_to_documents(event_list):
 
     documents = [{
         "id": event['id'],
-        "data": " ".join(event['terms']) if 'terms' in event else "" + " ".join(event['cssClassTerms']) if 'cssClassTerms' in event else "" + " ".join(event['idTerms']) if 'idTerms' in event else ""
+        "data": event_to_document(event)
         } for event in event_list]
 
     return documents
+
+def event_to_document(event):
+    return " ".join(event['terms']) if 'terms' in event else "" + " ".join(event['cssClassTerms']) if 'cssClassTerms' in event else "" + " ".join(event['idTerms']) if 'idTerms' in event else "" + " ".join(event['localizedTerms']) if 'localizedTerms' in event else "" + event_to_document(event['previous']) if 'previous' in event and event['previous'] else "" + event_to_document(event['next']) if 'next' in event and event['next'] else "" 
+
+
 
 def organize_entities(entities):
     '''
@@ -454,8 +472,6 @@ class TFIDFActivityLabels(MethodView):
 
 
 
-
-
 @blp_activity_label_generation_v2.route('/')
 class EnhancedEmbeddings(MethodView):
 
@@ -486,24 +502,29 @@ class EnhancedEmbeddings(MethodView):
 
             _mappings, optimal_result, k_values, losses, optimal_k = _process_embeddings(entities_by_symbol[symbol],_distances, symbol, all_embeddings)
             
-            fig_file_name = make_k_clustering_evaluation_figure(fig_name_prefix, symbol, k_values, losses, optimal_k)
-            pca_file_name = make_pca(fig_name_prefix, symbol, all_embeddings, optimal_result.labels)
-            
             mappings.update(_mappings)
 
-            if fig_file_name is not None:
-            # add clustering elbow chart to reponse
-                with open(fig_file_name, 'rb') as fig_file: 
-                    fig_file_bytes = fig_file.read()
+            # Additional diagnostic data only exists if there were enough entities (2) to do knee method operations.
+            if optimal_result is not None and k_values is not None and losses is not None and optimal_k is not None:
 
-                    response['clustering_results_' + symbol] = base64.b64encode(fig_file_bytes).decode('utf-8')
+                fig_file_name = make_k_clustering_evaluation_figure(fig_name_prefix, symbol, k_values, losses, optimal_k)
+                pca_file_name = make_pca(fig_name_prefix, symbol, all_embeddings, optimal_result.labels)
+                
+                
 
-            # add PCA chart to response
-            if pca_file_name is not None:
-                with open(pca_file_name, 'rb') as pca_file:
-                    pca_file_bytes = pca_file.read()
+                if fig_file_name is not None:
+                # add clustering elbow chart to reponse
+                    with open(fig_file_name, 'rb') as fig_file: 
+                        fig_file_bytes = fig_file.read()
 
-                    response['clustering_results_' + symbol + '_PCA'] = base64.b64encode(pca_file_bytes).decode('utf-8')
+                        response['clustering_results_' + symbol] = base64.b64encode(fig_file_bytes).decode('utf-8')
+
+                # add PCA chart to response
+                if pca_file_name is not None:
+                    with open(pca_file_name, 'rb') as pca_file:
+                        pca_file_bytes = pca_file.read()
+
+                        response['clustering_results_' + symbol + '_PCA'] = base64.b64encode(pca_file_bytes).decode('utf-8')
 
         response['mappings'] = mappings
         

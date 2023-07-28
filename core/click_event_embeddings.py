@@ -16,4 +16,6 @@ class ClickEventEmbeddings:
 
     Where <weight> is a decimal value co-efficient representing the weight of this
     feature in the final vector result.
+
+    TODO: weight is actually not being used at the moment
     '''
