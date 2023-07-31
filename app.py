@@ -188,51 +188,83 @@ def make_pca(figure_prefix, symbol, data, labels):
 
 
 
-def preprocess_entity(entity, symbol):
+def preprocess_entity(entity, symbol, weight_modifier=1.0):
     '''
-    Need to get to [(<name>, <data>, weight/or size if data = None>)] form
+    Need to get to [(<name>, <data>, weight)] form
+
+    July 31 2023: Let's make dom effects positive or negative based on their action. 
     '''
     print(json.dumps(entity, indent=4))
     feature_list = []
 
+    '''
+    ClickEntry specific components
+    '''
+    if symbol == 'CE':
+        if 'localizedTerms' in entity and len(entity['localizedTerms']) > 0:
+            feature_list.append(('localizedTerms', entity['localizedTerms'], 1.0 * weight_modifier))
+        else:
+            # only consider terms if 'localized terms' are not available.
+            if 'terms' in entity and len(entity['terms']) > 0:
+                feature_list.append(('terms', entity['terms'], 1.0 * weight_modifier))
+
+        feature_list = addListComponentIfExists('cssClassTerms', 1.0 * weight_modifier, feature_list, entity)
+        feature_list = addListComponentIfExists('idTerms', 1.0 * weight_modifier, feature_list, entity)
+
+    '''
+    Effect specific components
+    '''
+    if symbol == 'E':
+        
+        # feature_list = addListComponentIfExists('madeVisible', 1.0, feature_list, entity)
+        # feature_list = addListComponentIfExists('madeInvisible', -1.0, feature_list, entity)
+
+        feature_list = addListComponentIfExists('terms_added', 1.0 * weight_modifier, feature_list, entity)
+        feature_list = addListComponentIfExists('terms_removed', -1.0 * weight_modifier, feature_list, entity) # Note the negative weight on removed terms.
+        feature_list = addListComponentIfExists('cssClassTerms_added', 1.0 * weight_modifier, feature_list, entity)
+        feature_list = addListComponentIfExists('cssClassTerms_removed', -1.0 * weight_modifier, feature_list, entity) # Note the negative weight on removed terms.
+        feature_list = addListComponentIfExists('idTerms_added', 1.0 * weight_modifier, feature_list, entity)
+        feature_list = addListComponentIfExists('idTerms_removed', -1.0 * weight_modifier, feature_list, entity) # Note the negative weight on removed terms.
+
+    '''
+    Data Entry specific components
+    '''
+    if symbol == 'DE':
+
+        if 'localizedTerms' in entity and len(entity['localizedTerms']) > 0:
+            feature_list.append(('localizedTerms', entity['localizedTerms'], 1.0 * weight_modifier))
+        else:
+            # only consider terms if 'localized terms' are not available.
+            if 'terms' in entity and len(entity['terms']) > 0:
+                feature_list.append(('terms', entity['terms'], 1.0 * weight_modifier))  
+
+
+        feature_list = addListComponentIfExists('cssClassTerms', 1.0 * weight_modifier, feature_list, entity)
+        feature_list = addListComponentIfExists('idTerms', 1.0 * weight_modifier, feature_list, entity)      
+
+
+    '''
+    General components 
+    '''
+
     # if 'size' in entity:
     #     feature_list.append(('size', entity['size'], 1.0))
     
-    if 'localizedTerms' in entity and len(entity['localizedTerms']) > 0:
-        feature_list.append(('localizedTerms', entity['localizedTerms'], 1.0))
-    else:
-        # only consider terms if 'localized terms' are not available.
-        if 'terms' in entity and len(entity['terms']) > 0:
-            feature_list.append(('terms', entity['terms'], 1.0))
 
-   
-    if 'cssClassTerms' in entity and len(entity['cssClassTerms']) > 0:
-        feature_list.append(('cssClassTerms', entity['cssClassTerms'], 1.0))
-    
-    if 'idTerms' in entity and len(entity['idTerms']) > 0:
-        feature_list.append(('idTerms', entity['idTerms'], 1.0))
 
     if 'previous' in entity and entity['previous']:
-        previous_features = preprocess_entity(entity['previous'], entity['previous']['symbol'])
+        previous_features = preprocess_entity(entity['previous'], entity['previous']['symbol'], 0.0)
         feature_list = feature_list + previous_features
 
     if 'next' in entity and entity['next']:
-        next_features = preprocess_entity(entity['next'], entity['next']['symbol'])    
+        next_features = preprocess_entity(entity['next'], entity['next']['symbol'], 0.5)    
         feature_list = feature_list + next_features
 
-    '''
-    Symbol specific components
-    '''
-    if symbol == 'CE':
-        pass
+    return feature_list
 
-    if symbol == 'E':
-        pass
-
-    if symbol == 'DE':
-        pass
-
-
+def addListComponentIfExists(component_name, weight, feature_list, entity):
+    if component_name in entity and len(entity[component_name]) > 0:
+        feature_list.append((component_name, entity[component_name], weight))
     return feature_list
 
 def dist(v1, v2):

@@ -76,11 +76,14 @@ class Embeddings_v2():
 
     def processListComponent(self, feature_component):
 
-        print("computing feature embedding of {}. Type: List of strings.".format(feature_component[0]))
+        print("computing feature embedding of {}. Type: List of strings. Weight: {}".format(feature_component[0], feature_component[2]))
         terms = feature_component[1]
+        weight = feature_component[2]
 
         sub_embeddings = self.embedListOfStrings(terms)
         embedding = compute_centroid(sub_embeddings)
+
+        embedding = embedding * weight # Multiply weight into embedding.
 
         return embedding
 
@@ -90,7 +93,7 @@ class Embeddings_v2():
         #terms = terms[0:10]
 
         # Encode terms to roberta tokens 
-        token_set = [self.model.encode(term) for term in terms]
+        token_set = [self.model.encode(term) for term in terms if term and not term.isspace()]
 
         # Run the tokens through roberta
         layers = [self.model.extract_features(tokens, return_all_hiddens=True)[-1] for tokens in token_set]
