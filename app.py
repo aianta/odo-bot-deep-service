@@ -8,6 +8,7 @@ from .model import Embedding, EmbeddingSet
 from .schemas import EmbeddingRequestSchema, EmbeddingSchema, ActivityLabelsResponseSchema, ActivityLabelsRequestSchema
 from .core import roberta_embeddings
 from .core.embeddings_v2 import Embeddings_v2
+from .core.odo_distance_metric import odo_distance_function
 
 import kmedoids
 import pm4py
@@ -16,7 +17,8 @@ from sklearn.feature_extraction.text import TfidfTransformer, TfidfVectorizer
 from kneed import KneeLocator
 import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
-
+from scipy.cluster.hierarchy import dendrogram, linkage
+from scipy.spatial.distance import pdist, squareform
 
 import json
 import uuid
@@ -44,6 +46,11 @@ app.config['OPENAPI_VERSION'] = '3.0.2'
 app.config['API_TITLE'] = 'Odo-bot Deep Service'
 app.config['API_VERSION'] = 'v0.1'
 api = Api(app)
+
+blp_hierarchical_clustering = Blueprint(
+    'hierarchical-clustering', 'hierarchical', url_prefix='/hierarchical',
+    description = 'Explores hierarchical clustering for timeline entities.'
+)
 
 blp_tfidf = Blueprint(
     'tfidf-activity-labels', 'tfidf-activity-labels', url_prefix='/activitylabels/v3',
@@ -160,6 +167,17 @@ def make_k_clustering_evaluation_figure(fig_name_prefix, symbol, k_values,losses
 
     return fig_file_name
 
+def make_dendrogram(figure_prefix, symbol, data, labels):
+    dendrogram_fig_name = figure_prefix + symbol + "_hierarchical_clustering_dendrogram.png"
+
+    figure = plt.figure(0, figsize=(20,8))
+    dendrogram(data, labels=labels, orientation='right')
+    figure.tight_layout()
+    figure.savefig(dendrogram_fig_name)
+    figure.clear()
+    return dendrogram_fig_name
+
+
 def make_pca(figure_prefix, symbol, data, labels):
     '''
     Visualize PCA for analysis.
@@ -194,7 +212,7 @@ def preprocess_entity(entity, symbol, weight_modifier=1.0):
 
     July 31 2023: Let's make dom effects positive or negative based on their action. 
     '''
-    print(json.dumps(entity, indent=4))
+    #print(json.dumps(entity, indent=4))
     feature_list = []
 
     '''
@@ -422,6 +440,41 @@ class ActivityLabels(MethodView):
         
 
         return response 
+    
+@blp_hierarchical_clustering.route('/')
+class HierarchicalClustering(MethodView):
+
+    @blp_hierarchical_clustering.arguments(ActivityLabelsRequestSchema)
+    def post(self, request):
+        print('hit hierarchical endpoint!')
+        
+        entities_by_symbol = organize_entities(request['entities'])
+
+        for symbol in entities_by_symbol.keys():
+
+            #Convert entities to triple form: (id, preprocessed entity, original entity)  
+            preprocessed_entities = [ (entity['id'], preprocess_entity(entity, symbol), entity) for entity in entities_by_symbol[symbol]]
+
+            embeddings_objects = [Embedding(id=entry[0], metadata=entry[2], tensor=embedding_logic_v2.embed(features=entry[1], count=count, total=len(preprocessed_entities))) for count, entry in enumerate(preprocessed_entities)]
+            _embeddings = [x.tensor for x in embeddings_objects]
+            _labels = [x.id for x in embeddings_objects]
+            '''
+            All embeddings contains an n by m vector where n is the number of dimensions for the embeddings, and m is the number of embeddings (or timeline entities of this symbol). 
+            So each 'row' in this variable is an embedding of a timeline entity for this symbol.
+            '''
+            all_embeddings = np.vstack(_embeddings)
+
+            condensed_distance_matrix = pdist(all_embeddings, metric='euclidean')
+
+            updated_distance_matrix = odo_distance_function(condensed_distance_matrix, embeddings_objects)
+
+            linkage_data = linkage(updated_distance_matrix, method='single', metric='euclidean' )
+
+            cluster_file_name = make_dendrogram("", symbol, linkage_data, _labels)
+            
+
+
+        return "done"
 
 @blp_distance.route('/')
 class Distance(MethodView):
@@ -576,6 +629,7 @@ api.register_blueprint(blp_activity_label_generation)
 api.register_blueprint(blp_activity_label_generation_v2)
 api.register_blueprint(blp_tfidf)
 api.register_blueprint(blp_make_model)
+api.register_blueprint(blp_hierarchical_clustering)
 
 
 if __name__ == "__main__":

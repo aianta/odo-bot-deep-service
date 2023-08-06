@@ -5,9 +5,10 @@ Represents a single embedding
 '''
 class Embedding:
     
-    def __init__(self, id=None, tensor=None):
+    def __init__(self, id=None, tensor=None, metadata=None):
         self.id = uuid.uuid4() if id is None else id
         self.tensor = tensor
+        self.metadata = metadata
         print("embedding: " , tensor)
 
 '''
