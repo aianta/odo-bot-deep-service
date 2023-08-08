@@ -17,8 +17,11 @@ from sklearn.feature_extraction.text import TfidfTransformer, TfidfVectorizer
 from kneed import KneeLocator
 import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
-from scipy.cluster.hierarchy import dendrogram, linkage
+from scipy.cluster.hierarchy import dendrogram, linkage, fcluster
 from scipy.spatial.distance import pdist, squareform
+from sklearn.metrics import silhouette_score
+
+
 
 import json
 import uuid
@@ -48,7 +51,7 @@ app.config['API_VERSION'] = 'v0.1'
 api = Api(app)
 
 blp_hierarchical_clustering = Blueprint(
-    'hierarchical-clustering', 'hierarchical', url_prefix='/hierarchical',
+    'hierarchical-clustering', 'hierarchical', url_prefix='/activitylabels/v4',
     description = 'Explores hierarchical clustering for timeline entities.'
 )
 
@@ -167,11 +170,39 @@ def make_k_clustering_evaluation_figure(fig_name_prefix, symbol, k_values,losses
 
     return fig_file_name
 
-def make_dendrogram(figure_prefix, symbol, data, labels):
+'''
+Shamelessly copied from: https://joernhees.de/blog/2015/08/26/scipy-hierarchical-clustering-and-dendrogram-tutorial/#Eye-Candy
+Then modified for horizontal dendrograms
+'''
+def fancy_dendrogram(*args, **kwargs):
+    max_d = kwargs.pop('max_d', None)
+    if max_d and 'color_threshold' not in kwargs:
+        kwargs['color_threshold'] = max_d
+    annotate_above = kwargs.pop('annotate_above', 0)
+
+    ddata = dendrogram(*args, **kwargs)
+
+    if not kwargs.get('no_plot', False):
+        plt.title('Hierarchical Clustering Dendrogram (truncated)')
+        plt.ylabel('sample index')
+        plt.xlabel('distance')
+        for i, d, c in zip( ddata['dcoord'], ddata['icoord'], ddata['color_list']):
+            x = 0.5 * sum(i[1:3])
+            y = 0.5 * sum(d[1:3])
+            if x > annotate_above:
+                plt.plot(x, y, 'o', c=c)
+                plt.annotate("%.3g" % x, (x,y), xytext=(0, -5),
+                             textcoords='offset points',
+                             va='top', ha='center')
+        if max_d:
+            plt.axvline(x=max_d, c='k')
+    return ddata
+
+def make_dendrogram(figure_prefix, symbol, data, labels, max_distance):
     dendrogram_fig_name = figure_prefix + symbol + "_hierarchical_clustering_dendrogram.png"
 
     figure = plt.figure(0, figsize=(20,8))
-    dendrogram(data, labels=labels, orientation='right')
+    fancy_dendrogram(data, labels=labels, orientation='right',max_d=max_distance)
     figure.tight_layout()
     figure.savefig(dendrogram_fig_name)
     figure.clear()
@@ -357,33 +388,47 @@ class MakeModel(MethodView):
         print("Start activities: {}\nEnd activities: {}".format(start_activities, end_activities))
 
         process_tree = pm4py.discover_process_tree_inductive(eventlog)
-        bpmn_model = pm4py.convert_to_bpmn(process_tree)
+        made_bpmn = make_bpmn(process_tree)
         dfg, start, end = pm4py.discover_dfg(eventlog)
         petri_net, initial, final = pm4py.discover_petri_net_inductive(eventlog)
         transition_system = pm4py.discover_transition_system(eventlog)
+        
 
-        pm4py.save_vis_bpmn(bpmn_model, bpmn_output)
+
+       
         pm4py.save_vis_process_tree(process_tree, tree_output)
         pm4py.save_vis_dfg(dfg, start, end, dfg_output)
         pm4py.save_vis_petri_net(petri_net, initial, final, petri_net_output)
         pm4py.save_vis_transition_system(transition_system, transition_system_output)
 
         with open(bpmn_output, 'rb') as bpmn_file, open(tree_output, 'rb') as tree_file, open(dfg_output, 'rb') as dfg_file, open(petri_net_output, 'rb') as petri_file, open(transition_system_output, 'rb') as transition_file:
-            bpmn_bytes = bpmn_file.read()
+
             tree_bytes = tree_file.read()
             dfg_bytes = dfg_file.read()
             petri_bytes = petri_file.read()
             transition_bytes = transition_file.read()
 
             response = {
-                "bpmn": base64.b64encode(bpmn_bytes).decode('utf-8'),
                 "tree": base64.b64encode(tree_bytes).decode('utf-8'),
                 "dfg":  base64.b64encode(dfg_bytes).decode('utf-8'),
                 "petri": base64.b64encode(petri_bytes).decode('utf-8'),
                 "transition": base64.b64encode(transition_bytes).decode('utf-8')
             }
 
+            if made_bpmn: # if the bpmn was successfully made add it to the response
+                bpmn_bytes = bpmn_file.read()
+                response["bpmn"] =  base64.b64encode(bpmn_bytes).decode('utf-8')
+
             return response
+
+def make_bpmn(process_tree):
+    try:
+        bpmn_model = pm4py.convert_to_bpmn(process_tree)
+        pm4py.save_vis_bpmn(bpmn_model, bpmn_output)
+        return True
+    except:
+        print("Could not convert to bpmn.")
+        return False
 
 
 
@@ -449,7 +494,9 @@ class HierarchicalClustering(MethodView):
         print('hit hierarchical endpoint!')
         
         entities_by_symbol = organize_entities(request['entities'])
-
+        
+        response = {"id":request['id']}
+        mappings = {}
         for symbol in entities_by_symbol.keys():
 
             #Convert entities to triple form: (id, preprocessed entity, original entity)  
@@ -465,16 +512,67 @@ class HierarchicalClustering(MethodView):
             all_embeddings = np.vstack(_embeddings)
 
             condensed_distance_matrix = pdist(all_embeddings, metric='euclidean')
-
-            updated_distance_matrix = odo_distance_function(condensed_distance_matrix, embeddings_objects)
+            
+            # Combine embedding distances with domain rules to create better clusterings
+            updated_distance_matrix, max_distance = odo_distance_function(condensed_distance_matrix, embeddings_objects)
 
             linkage_data = linkage(updated_distance_matrix, method='single', metric='euclidean' )
 
-            cluster_file_name = make_dendrogram("", symbol, linkage_data, _labels)
+        
             
+            '''
+            Using max distance as the cutoff for the number of clusters will always give us 1 cluster in the case where no_merge rules have been applied.
+            thus we need to use ever so slightly less than the max distance to get the correct number of clusters.
+            so let's do that by subtracting 1% from the max distance.
+            '''
+            max_distance = max_distance - (max_distance * 0.01)
+
+            cluster_file_name = make_dendrogram(fig_name_prefix, symbol, linkage_data, _labels, max_distance)
+
+            clusterings = [(fcluster(linkage_data, k, criterion='maxclust'), k) for k in range(2, len(embeddings_objects))]
+            clusterings = [cluster for cluster in clusterings if len(np.unique(cluster[0])) > 1]
+            # for cluster in clusterings:
+            #     print("k=", cluster[1], " cluster: ", cluster[0], "size: ", len(cluster[0]), "shape: ", cluster[0].shape, "num embeddings: ", len(embeddings_objects))
+            #     print("sillhouette score: ", silhouette_score(squareform(updated_distance_matrix), cluster[0], metric='precomputed'))
+
+            clusterings = [(silhouette_score(squareform(updated_distance_matrix), labels=cluster[0], metric='precomputed'), cluster[0], cluster[1]) for cluster in clusterings]
+            clusterings.sort(key=lambda x: x[0], reverse=True) # Sort by silhouette score in descending order
+            
+            for cluster in clusterings:
+                print("k=", cluster[2], " silhouette_score=", cluster[0])
+
+            #clusters = fcluster(linkage_data, max_distance, criterion='distance')
+            clusters = clusterings[0][1]
+            
+            #_silhouette_score = silhouette_score(updated_distance_matrix, clusters, metric='precomputed' )
+
+            pca_file_name = make_pca(fig_name_prefix, symbol, all_embeddings, clusters )
+
+            mapping_entries = [(embeddings_objects[index].id, symbol+"#"+str(cluster)) for index, cluster in enumerate(clusters)]
+
+            print("from ", len(embeddings_objects), "entities, we have ", len(np.unique(clusters)) , "unique activity labels.")
 
 
-        return "done"
+            print(silhouette_score)
+
+            mappings.update(mapping_entries)
+
+            if cluster_file_name is not None:
+                # add clustering dendrogram to response
+                with open(cluster_file_name, 'rb') as cluster_file:
+                    cluster_file_bytes = cluster_file.read()
+                    response['clustering_results_' + symbol +'_dendrogram'] = base64.b64encode(cluster_file_bytes).decode('utf-8')
+        
+            if pca_file_name is not None:
+                # add PCA chart to response
+                with open(pca_file_name, 'rb') as pca_file:
+                    pca_file_bytes = pca_file.read()
+
+                    response['clustering_results_' + symbol + '_PCA'] = base64.b64encode(pca_file_bytes).decode('utf-8')
+
+        response['mappings'] = mappings   
+        
+        return response
 
 @blp_distance.route('/')
 class Distance(MethodView):
