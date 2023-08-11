@@ -53,9 +53,49 @@ def decision_function(entity1, entity2):
     merge = if_it_exists_it_must_match('cssClassTerms', entity1, entity2)
     if merge != 'can_merge':
         return merge
-        
+    
+    merge = non_empty_list_cannot_match_empty_list('E', 'cssClassTerms_added', entity1, entity2)
+    if merge != 'can_merge':
+        return merge
+    
+    merge = non_empty_list_cannot_match_empty_list('E', 'cssClassTerms_removed', entity1, entity2)
+    if merge != 'can_merge':
+        return merge
+    
+    merge = non_empty_list_cannot_match_empty_list('E', 'idTerms_added', entity1, entity2)
+    if merge != 'can_merge':
+        return merge
+    
+    merge = non_empty_list_cannot_match_empty_list('E', 'idTerms_removed', entity1, entity2)
+    if merge != 'can_merge':
+        return merge
     
     return merge
+
+'''
+If one entity for example, removes some id terms, then any other entity that it is clustered with, should also
+remove some id terms. 
+'''
+def non_empty_list_cannot_match_empty_list(symbol, field, entity1, entity2):
+    # Only apply this rule if the entities are the same symbol.
+    if entity1.metadata['symbol'] != symbol or entity2.metadata['symbol'] != symbol:
+        return 'can_merge'
+
+    # If one entity has field, the other must have the same field to merge.
+    if field in entity1.metadata and field not in entity2.metadata:
+        return 'must_not_merge' # do not merge if entity 1 has field but entity2 does not.
+    if field in entity2.metadata and field not in entity1.metadata:
+        return 'must_not_merge' # do not merge if entity 2 has field but entity1 does not.
+    if field in entity1.metadata and field in entity2.metadata:
+        if len(entity1.metadata[field]) == 0 and len(entity2.metadata[field]) != 0:
+            return 'must_not_merge'
+        if len(entity1.metadata[field]) != 0 and len(entity2.metadata[field]) == 0:
+            return 'must_not_merge'
+    
+    return 'can_merge'
+
+    
+
 
 
 def if_it_exists_it_must_match(field, entity1, entity2):
