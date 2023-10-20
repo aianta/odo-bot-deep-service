@@ -38,36 +38,47 @@ def decision_function(entity1, entity2):
     
     # If the two entities have different baseURIs then they must not merge.
     if entity1.metadata['baseURI'] != entity2.metadata['baseURI']:
+        print(entity1.metadata['id'], ' and ', entity2.metadata['id'], ' cannot merge because entity1 has baseURI: ', entity1.metadata['baseURI'], ' and entity2 has baseURI: ', entity2.metadata['baseURI'])
         return 'must_not_merge'
 
     # If the two entities are DEs and one follows the other then they must not merge. This is because summarization ensures these would be different DEs.
     if entity1.metadata['symbol'] == 'DE' and entity2.metadata['symbol'] == 'DE' and entity1.metadata['nextId'] == entity2.metadata['id']:
+        print(entity1.metadata['id'], ' and ', entity2.metadata['id'], ' cannot merge they are both DE terms and appear successively in their respective timeline.')
         return 'must_not_merge'
     
     merge = 'can_merge'
 
     merge = if_it_exists_it_must_match('idTerms', entity1, entity2)
     if merge != 'can_merge': # if we can still merge keep going
+        if entity1.metadata['symbol'] == 'DE' and entity2.metadata['symbol'] == 'DE' and entity1.metadata['localizedTerms'] == entity2.metadata['localizedTerms']:
+            return 'can_merge'
+
+        print(entity1.metadata['id'], ' and ', entity2.metadata['id'], ' cannot merge because idTerms do not match')
         return merge
     
     merge = if_it_exists_it_must_match('cssClassTerms', entity1, entity2)
     if merge != 'can_merge':
+        print(entity1.metadata['id'], ' and ', entity2.metadata['id'], ' cannot merge because cssClassTerms do not match')
         return merge
     
     merge = non_empty_list_cannot_match_empty_list('E', 'cssClassTerms_added', entity1, entity2)
     if merge != 'can_merge':
+        print(entity1.metadata['id'], ' and ', entity2.metadata['id'], ' cannot merge because one has cssClassTerms_added and the other does not.')
         return merge
     
     merge = non_empty_list_cannot_match_empty_list('E', 'cssClassTerms_removed', entity1, entity2)
     if merge != 'can_merge':
+        print(entity1.metadata['id'], ' and ', entity2.metadata['id'], ' cannot merge because one has cssClassTerms_removed and the other does not.')
         return merge
     
     merge = non_empty_list_cannot_match_empty_list('E', 'idTerms_added', entity1, entity2)
     if merge != 'can_merge':
+        print(entity1.metadata['id'], ' and ', entity2.metadata['id'], ' cannot merge because one has idTerms_added and the other does not.')
         return merge
     
     merge = non_empty_list_cannot_match_empty_list('E', 'idTerms_removed', entity1, entity2)
     if merge != 'can_merge':
+        print(entity1.metadata['id'], ' and ', entity2.metadata['id'], ' cannot merge because one has idTerms_removed and the other does not.')
         return merge
     
     return merge
@@ -106,11 +117,21 @@ def if_it_exists_it_must_match(field, entity1, entity2):
         return 'must_not_merge' # do not merge if entity 2 has id terms but entity1 does not.
     if field in entity1.metadata and field in entity2.metadata:
         if len(entity1.metadata[field]) != len(entity2.metadata[field]):
-            return 'must_not_merge' # do not merge if entity 1 and entity 2 have different number of id terms. Incidently this should never be bigger than 1.
-        if len(entity1.metadata[field]) == 1: # if there are id terms
-            if len(entity1.metadata[field]) == 1 and entity1.metadata[field][0] == entity2.metadata['idTerms'][0]:
-                return 'must_merge' # if the entities have the same id term then they must merge
-            else:
-                return 'must_not_merge' #if they have different id terms they must not merge
+            return 'must_not_merge' # do not merge if entity 1 and entity 2 have different number of terms. 
+        if len(entity1.metadata[field]) == len(entity2.metadata[field]):
+            if compare_lists(entity1.metadata[field], entity2.metadata[field]) == False:
+                return 'must_not_merge'
+        
 
     return 'can_merge'        
+
+'''
+https://www.tutorialspoint.com/how-to-compare-two-lists-in-python
+'''
+def compare_lists(l1, l2):
+    l1.sort()
+    l2.sort()
+    if(l1 == l2):
+        return True
+    else: 
+        return False

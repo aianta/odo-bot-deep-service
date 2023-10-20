@@ -9,6 +9,8 @@ from .schemas import EmbeddingRequestSchema, EmbeddingSchema, ActivityLabelsResp
 from .core import roberta_embeddings
 from .core.embeddings_v2 import Embeddings_v2
 from .core.odo_distance_metric import odo_distance_function
+from .core.utils import make_pca
+from .core.hierarchical_clustering import do_clustering as do_h_clustering
 
 import kmedoids
 import pm4py
@@ -209,32 +211,6 @@ def make_dendrogram(figure_prefix, symbol, data, labels, max_distance):
     return dendrogram_fig_name
 
 
-def make_pca(figure_prefix, symbol, data, labels):
-    '''
-    Visualize PCA for analysis.
-    https://machinelearningmastery.com/principal-component-analysis-for-visualization/
-
-    Since we're normalizing vectors during the embedding process, I don't think we'll need to the standard scalar normalization here.
-    '''
-    pca_fig_name = figure_prefix + symbol + "_PCA.png"
-
-    pca = PCA()
-    pca_embeddings_t = pca.fit_transform(data)
-    pca_fig = plt.figure("PCA figure")
-    pca_plot = plt.scatter(pca_embeddings_t[:,0], pca_embeddings_t[:,1],c=labels)
-    plt.title("PCA for ("+symbol+") Clustering")
-    plt.legend(handles=pca_plot.legend_elements()[0], labels=list(np.unique(labels)))
-    pca_ax = pca_plot.axes
-    plt.text(-0.1,-0.2, "Top 5 VR: " + str(pca.explained_variance_ratio_[0:5]),transform=pca_ax.transAxes, va='bottom', ha='left', wrap=True)
-    pca_fig.tight_layout()
-    pca_fig.savefig(pca_fig_name)
-    pca_fig.clear()
-    
-    print("VC: ", pca.explained_variance_ratio_)
-
-    return pca_fig_name
-
-
 
 
 def preprocess_entity(entity, symbol, weight_modifier=1.0):
@@ -274,6 +250,8 @@ def preprocess_entity(entity, symbol, weight_modifier=1.0):
         feature_list = addListComponentIfExists('cssClassTerms_removed', -1.0 * weight_modifier, feature_list, entity) # Note the negative weight on removed terms.
         feature_list = addListComponentIfExists('idTerms_added', 1.0 * weight_modifier, feature_list, entity)
         feature_list = addListComponentIfExists('idTerms_removed', -1.0 * weight_modifier, feature_list, entity) # Note the negative weight on removed terms.
+        #feature_list = addListComponentIfExists('tags_added', 1.0 * weight_modifier, feature_list, entity)
+        #feature_list = addListComponentIfExists('tags_removed', 1.0 * weight_modifier, feature_list, entity)
 
     '''
     Data Entry specific components
@@ -511,49 +489,27 @@ class HierarchicalClustering(MethodView):
             '''
             all_embeddings = np.vstack(_embeddings)
 
-            condensed_distance_matrix = pdist(all_embeddings, metric='euclidean')
-            
-            # Combine embedding distances with domain rules to create better clusterings
-            updated_distance_matrix, max_distance = odo_distance_function(condensed_distance_matrix, embeddings_objects)
-
-            linkage_data = linkage(updated_distance_matrix, method='single', metric='euclidean' )
-
+            print('number of ', symbol, ' embeddings: ', len(all_embeddings))
         
-            
             '''
-            Using max distance as the cutoff for the number of clusters will always give us 1 cluster in the case where no_merge rules have been applied.
-            thus we need to use ever so slightly less than the max distance to get the correct number of clusters.
-            so let's do that by subtracting 1% from the max distance.
+            More than one item should exist for clustering to take place. So if we only have one DataEntry in
+            a timeline/trace, then it just goes in its own cluster and we skip the clustering process. 
             '''
-            max_distance = max_distance - (max_distance * 0.01)
-
-            cluster_file_name = make_dendrogram(fig_name_prefix, symbol, linkage_data, _labels, max_distance)
-
-            clusterings = [(fcluster(linkage_data, k, criterion='maxclust'), k) for k in range(2, len(embeddings_objects))]
-            clusterings = [cluster for cluster in clusterings if len(np.unique(cluster[0])) > 1]
-            # for cluster in clusterings:
-            #     print("k=", cluster[1], " cluster: ", cluster[0], "size: ", len(cluster[0]), "shape: ", cluster[0].shape, "num embeddings: ", len(embeddings_objects))
-            #     print("sillhouette score: ", silhouette_score(squareform(updated_distance_matrix), cluster[0], metric='precomputed'))
-
-            clusterings = [(silhouette_score(squareform(updated_distance_matrix), labels=cluster[0], metric='precomputed'), cluster[0], cluster[1]) for cluster in clusterings]
-            clusterings.sort(key=lambda x: x[0], reverse=True) # Sort by silhouette score in descending order
+            if(len(all_embeddings) > 1):
             
-            for cluster in clusterings:
-                print("k=", cluster[2], " silhouette_score=", cluster[0])
+                clusters, linkage_data, max_distance = do_h_clustering(symbol, all_embeddings, embeddings_objects, _labels)
 
-            #clusters = fcluster(linkage_data, max_distance, criterion='distance')
-            clusters = clusterings[0][1]
-            
-            #_silhouette_score = silhouette_score(updated_distance_matrix, clusters, metric='precomputed' )
+                cluster_file_name = make_dendrogram(fig_name_prefix, symbol, linkage_data, _labels, max_distance)
 
-            pca_file_name = make_pca(fig_name_prefix, symbol, all_embeddings, clusters )
+                pca_file_name = make_pca(fig_name_prefix, symbol, all_embeddings, clusters )
 
-            mapping_entries = [(embeddings_objects[index].id, symbol+"#"+str(cluster)) for index, cluster in enumerate(clusters)]
-
-            print("from ", len(embeddings_objects), "entities, we have ", len(np.unique(clusters)) , "unique activity labels.")
+                mapping_entries = [(embeddings_objects[index].id, symbol+"#"+str(cluster)) for index, cluster in enumerate(clusters)]
+            else:
+                # If there is only one instance of a symbol it is in its own cluster.
+                mapping_entries = [(embeddings_objects[0].id, symbol+"#0")]
+            # print("from ", len(embeddings_objects), "entities, we have ", len(np.unique(clusters)) , "unique activity labels.")
 
 
-            print(silhouette_score)
 
             mappings.update(mapping_entries)
 

@@ -163,3 +163,5 @@ embeddings/
 
 *.png
 *.xes
+
+*.code-workspace
