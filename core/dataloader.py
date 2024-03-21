@@ -5,6 +5,8 @@ import pandas as pd
 from sklearn.model_selection import train_test_split
 from label_classification_metric import LabelClassificationMetric
 
+
+
 def make_label_classification_metrics( db_path, dataset_name):
 
     metrics_result = {}
@@ -35,7 +37,7 @@ def get_feature_vector_dataframe(df):
 def get_labels_dataframe(df):
     return df.iloc[:, -1:]
 
-def split(df):
+def split(df, test_size=0.1):
 
     # Remove data points belonging to a group of size fewer than 2 for a class. IE: if we only have 1 data point of a label, remove that row
     # Inspired from this answer on stackoverflow: https://stackoverflow.com/questions/53832858/drop-rows-corresponding-to-groups-smaller-than-specified-size
@@ -49,7 +51,7 @@ def split(df):
         feature_vectors_df,
         labels_df,
         stratify=labels_df,
-        test_size=0.1
+        test_size=test_size
     )
 
 

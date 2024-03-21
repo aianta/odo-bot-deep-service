@@ -94,8 +94,8 @@ def main():
 
     dl.print_label_metrics(label_metrics)
 
-    for index, log_prob in enumerate(model.feature_log_prob_):
-        print(f"[{index}]\n", log_prob )
+    # for index, log_prob in enumerate(model.feature_log_prob_):
+    #     print(f"[{index}]\n", log_prob )
 
     print("model.score result: ")
     print(model.score(X_test, y_test))

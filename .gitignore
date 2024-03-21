@@ -165,3 +165,5 @@ embeddings/
 *.xes
 
 *.code-workspace
+
+core/outputs
